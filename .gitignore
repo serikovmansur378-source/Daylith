@@ -209,10 +209,10 @@ finance.json
 chart.png
 Bot_tg.py
 timer_Sunday.json
-
-
-
-
-
+dist
+.venv/
+timer_Sunday.json
+timer_Tuesday.json
+users_data.db
 
 
