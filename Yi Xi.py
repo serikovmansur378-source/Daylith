@@ -158,28 +158,35 @@ class DayWindow(ctk.CTkToplevel):
         ''', (self.day_name,))
 
         self.tasks = [{
-            "id": r[0], "text": r[1], "time": r[2], "done": bool(r[3]), "already_notified": bool(r[4])
+            "id": r[0], "text": r[1], "time": r[2], "done":r[3], "already_notified": bool(r[4])
         } for r in rows]
 
     def render_tasks(self):
         self.tasks_box.delete("1.0", "end")
         for i, task in enumerate(self.tasks, 1):
-            status = "✔" if task["done"] else "☐"
+            if task["done"] == 1:
+                status = "✔"
+            elif task["done"] == 2:
+                status = "✘"
+            else:
+                status = "☐"
             time_str = f"[{task['time']}]" if task['time'] else ""
             self.tasks_box.insert("end", f"{i}. {status} {task['text']} {time_str}\n")
 
     def update_progress_circle(self):
         total = len(self.tasks)
-        done = len([t for t in self.tasks if t["done"]])
+        done = len([t for t in self.tasks if t["done"] == 1])
+        failed = len([t for t in self.tasks if t["done"] == 2])
+        undone = total - done - failed
+
         self.ax.clear()
         if total > 0:
-            undone = total - done
-            self.ax.pie([done, undone], labels=["Done", "Undone"], textprops={'color': "white"},
-                        colors=['#5676d7', '#324786'], startangle=90, autopct="%1.1f%%")
+            self.ax.pie([done, undone, failed], labels=["Done", "Undone", "Failed"], textprops={'color': "white"},
+                        colors=['#5676d7', '#324786', "#330570"], startangle=90, autopct="%1.1f%%")
         else:
             self.ax.text(0.5, 0.5, "No tasks", color="white", ha='center')
         self.ax.set_title("Daily Progress", color="white")
-        self.canvas.draw()
+        self.canvas.draw() #bool
 
     def check_time(self):
         if self._is_destroyed: return
@@ -187,7 +194,7 @@ class DayWindow(ctk.CTkToplevel):
         if self.day_name == current_day:
             now = datetime.now().strftime("%H:%M")
             for task in self.tasks:
-                if task["time"] == now and not task["done"] and not task["already_notified"]:
+                if task["time"] >= now and not task["done"] and not task["already_notified"]:
                     task["already_notified"] = True
                     self.update_task_status(task["id"], task["done"], True)
                     self.notify(task)
@@ -211,8 +218,8 @@ class DayWindow(ctk.CTkToplevel):
             popup.destroy()
 
         ctk.CTkLabel(popup, text=f"It's time for:\n{task['text']}", font=("Arial", 14)).pack(pady=20)
-        ctk.CTkButton(popup, text="Completed", command=lambda: confirm(True)).pack(pady=5)
-        ctk.CTkButton(popup, text="Skip", fg_color="red", command=lambda: confirm(False)).pack(pady=5)
+        ctk.CTkButton(popup, text="Completed", command=lambda: confirm(1)).pack(pady=5)
+        ctk.CTkButton(popup, text="Failed", fg_color="red", command=lambda: confirm(2)).pack(pady=5)
 
     def on_close(self):
         self._is_destroyed = True
