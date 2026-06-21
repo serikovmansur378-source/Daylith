@@ -97,7 +97,10 @@ class DayWindow(ctk.CTkToplevel):
         self.tasks_box = ctk.CTkTextbox(self, height=150)
         self.tasks_box.pack(fill="both", expand=False, padx=20, pady=10)
 
-        self.btn_delete = ctk.CTkButton(self, text="DELETE LAST", fg_color="red", command=self.delete_last)
+        self.del_entry = ctk.CTkEntry(self, placeholder_text="Number Task")
+        self.del_entry.pack(pady=5)
+
+        self.btn_delete = ctk.CTkButton(self, text="DELETE Task", fg_color="red", command=self.delete_task)
         self.btn_delete.pack(pady=5)
 
         self.progress_frame = ctk.CTkFrame(self, height=200)
@@ -140,12 +143,21 @@ class DayWindow(ctk.CTkToplevel):
         self.render_tasks()
         self.update_progress_circle()
 
-    def delete_last(self):
-        if not self.tasks: return
-        db.execute("DELETE FROM tasks WHERE id = ?", (self.tasks[-1]["id"],))
-        self.load_tasks()
-        self.render_tasks()
-        self.update_progress_circle()
+    def delete_task(self):
+        try:
+            task_index = int(self.del_entry.get().strip()) - 1
+
+            if 0 <= task_index < len(self.tasks):
+                real_id = self.tasks[task_index]["id"]
+
+                db.execute("DELETE FROM tasks WHERE id = ?", (real_id,))
+
+                self.del_entry.delete(0, "end")
+                self.load_tasks()
+                self.render_tasks()
+                self.update_progress_circle()
+        except ValueError:
+            print("Write number")
 
     def update_task_status(self, task_id, is_done, already_notified):
         db.execute('UPDATE tasks SET is_done = ?, already_notified = ? WHERE id = ?',
@@ -194,7 +206,7 @@ class DayWindow(ctk.CTkToplevel):
         if self.day_name == current_day:
             now = datetime.now().strftime("%H:%M")
             for task in self.tasks:
-                if task["time"] >= now and not task["done"] and not task["already_notified"]:
+                if task["time"] <= now and not task["done"] and not task["already_notified"]:
                     task["already_notified"] = True
                     self.update_task_status(task["id"], task["done"], True)
                     self.notify(task)
