@@ -9,19 +9,21 @@ from PIL import Image
 import pystray
 import threading
 
+# Set global UI theme configurations
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
 
 class Database:
-    """Handles SQLite database operations and migrations."""
+    """Handles SQLite database operations and schema migrations."""
 
     def __init__(self, db_name='planner.db'):
         self.db_name = db_name
         self.init_db()
-        self.migrate_db()  # Add missing columns if upgrading from older versions
+        self.migrate_db()
 
     def init_db(self):
+        """Creates the tasks table if it does not exist."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -40,12 +42,13 @@ class Database:
             conn.commit()
 
     def migrate_db(self):
-        """Safely add new columns to existing table if they do not exist."""
+        """Applies schema updates incrementally for backward compatibility."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute("PRAGMA table_info(tasks)")
             columns = [column[1] for column in cursor.fetchall()]
 
+            # Add missing columns dynamically if upgrading from an older schema version
             if 'task_type' not in columns:
                 cursor.execute("ALTER TABLE tasks ADD COLUMN task_type TEXT DEFAULT 'daily'")
             if 'interval_seconds' not in columns:
@@ -56,6 +59,7 @@ class Database:
             conn.commit()
 
     def execute(self, query, params=()):
+        """Executes a SQL query within a safe context manager and returns results."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute(query, params)
@@ -67,7 +71,7 @@ db = Database()
 
 
 class DayWindow(ctk.CTkToplevel):
-    """UI window for managing daily tasks."""
+    """UI window for managing schedule-based daily tasks."""
 
     def __init__(self, parent, day_name):
         super().__init__(parent)
@@ -76,7 +80,7 @@ class DayWindow(ctk.CTkToplevel):
         self.geometry("400x800")
 
         self.tasks = []
-        self._is_destroyed = False
+        self._is_destroyed = False  # Lifecycle flag to prevent memory leaks in recurring loops
 
         self.setup_ui()
         self.load_tasks()
@@ -84,10 +88,10 @@ class DayWindow(ctk.CTkToplevel):
         self.update_progress_circle()
         self.check_time()
 
-        # Prevent memory leaks on window close
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def setup_ui(self):
+        """Initializes widgets for task entry, processing, and visualization."""
         self.entry = ctk.CTkEntry(self, placeholder_text="Task (e.g. Work 15:15)")
         self.entry.pack(fill="x", padx=20, pady=10)
 
@@ -103,6 +107,7 @@ class DayWindow(ctk.CTkToplevel):
         self.btn_delete = ctk.CTkButton(self, text="DELETE Task", fg_color="red", command=self.delete_task)
         self.btn_delete.pack(pady=5)
 
+        # Embedded Matplotlib container for data rendering
         self.progress_frame = ctk.CTkFrame(self, height=200)
         self.progress_frame.pack(fill="both", expand=True, padx=20, pady=10)
 
@@ -114,6 +119,7 @@ class DayWindow(ctk.CTkToplevel):
         self.reset.pack(padx=20, pady=10)
 
     def reset_done(self):
+        """Resets status indicators for all daily tasks of the current day."""
         db.execute("UPDATE tasks SET is_done = 0, already_notified = 0 WHERE day = ? AND task_type = 'daily'",
                    (self.day_name,))
         self.load_tasks()
@@ -121,6 +127,7 @@ class DayWindow(ctk.CTkToplevel):
         self.update_progress_circle()
 
     def parse_task(self, text):
+        """Extracts the HH:MM timestamp from string input using regex."""
         match = re.search(r"\d{2}:\d{2}", text)
         if match:
             time = match.group()
@@ -129,6 +136,7 @@ class DayWindow(ctk.CTkToplevel):
         return text, None
 
     def add_task(self):
+        """Validates, parses, and persists a new daily task."""
         raw = self.entry.get().strip()
         if not raw: return
         text, time = self.parse_task(raw)
@@ -144,14 +152,13 @@ class DayWindow(ctk.CTkToplevel):
         self.update_progress_circle()
 
     def delete_task(self):
+        """Removes a task from the database by its sequential visual index."""
         try:
             task_index = int(self.del_entry.get().strip()) - 1
 
             if 0 <= task_index < len(self.tasks):
                 real_id = self.tasks[task_index]["id"]
-
                 db.execute("DELETE FROM tasks WHERE id = ?", (real_id,))
-
                 self.del_entry.delete(0, "end")
                 self.load_tasks()
                 self.render_tasks()
@@ -160,20 +167,23 @@ class DayWindow(ctk.CTkToplevel):
             print("Write number")
 
     def update_task_status(self, task_id, is_done, already_notified):
+        """Updates completion and notification states in the database."""
         db.execute('UPDATE tasks SET is_done = ?, already_notified = ? WHERE id = ?',
                    (int(is_done), int(already_notified), task_id))
 
     def load_tasks(self):
+        """Fetches daily tasks data from storage into memory."""
         rows = db.execute('''
             SELECT id, task_text, task_time, is_done, already_notified 
             FROM tasks WHERE day = ? AND task_type = 'daily' ORDER BY id
         ''', (self.day_name,))
 
         self.tasks = [{
-            "id": r[0], "text": r[1], "time": r[2], "done":r[3], "already_notified": bool(r[4])
+            "id": r[0], "text": r[1], "time": r[2], "done": r[3], "already_notified": bool(r[4])
         } for r in rows]
 
     def render_tasks(self):
+        """Refreshes the display text box with updated task items and status glyphs."""
         self.tasks_box.delete("1.0", "end")
         for i, task in enumerate(self.tasks, 1):
             if task["done"] == 1:
@@ -186,6 +196,7 @@ class DayWindow(ctk.CTkToplevel):
             self.tasks_box.insert("end", f"{i}. {status} {task['text']} {time_str}\n")
 
     def update_progress_circle(self):
+        """Generates or updates the Matplotlib pie chart representing daily metrics."""
         total = len(self.tasks)
         done = len([t for t in self.tasks if t["done"] == 1])
         failed = len([t for t in self.tasks if t["done"] == 2])
@@ -198,25 +209,30 @@ class DayWindow(ctk.CTkToplevel):
         else:
             self.ax.text(0.5, 0.5, "No tasks", color="white", ha='center')
         self.ax.set_title("Daily Progress", color="white")
-        self.canvas.draw() #bool
+        self.canvas.draw()
 
     def check_time(self):
+        """Polling loop running every 30 seconds to trigger task time notifications."""
         if self._is_destroyed: return
         current_day = datetime.now().strftime("%A")
+
+        # Check targets only if this window matches the current real-world day
         if self.day_name == current_day:
             now = datetime.now().strftime("%H:%M")
             for task in self.tasks:
-                if task["time"] <= now and not task["done"] and not task["already_notified"]:
+                if task["time"] and task["time"] <= now and not task["done"] and not task["already_notified"]:
                     task["already_notified"] = True
                     self.update_task_status(task["id"], task["done"], True)
                     self.notify(task)
         self.after(30000, self.check_time)
 
     def notify(self, task):
+        """Spawns an asynchronous audio alert and top-most modal popup for tasks."""
         try:
             winsound.PlaySound("study.wav", winsound.SND_FILENAME | winsound.SND_ASYNC)
         except:
-            pass
+            pass  # Suppress errors if the audio driver or file is unavailable
+
         popup = ctk.CTkToplevel(self)
         popup.title("Task Reminder!")
         popup.geometry("300x200")
@@ -234,13 +250,14 @@ class DayWindow(ctk.CTkToplevel):
         ctk.CTkButton(popup, text="Failed", fg_color="red", command=lambda: confirm(2)).pack(pady=5)
 
     def on_close(self):
+        """Explicitly handles object disposal to prevent canvas memory leaks."""
         self._is_destroyed = True
-        plt.close(self.fig)  # Prevent matplotlib memory leak
+        plt.close(self.fig)
         self.destroy()
 
 
 class TimerWindow(ctk.CTkToplevel):
-    """UI window for managing interval timers."""
+    """UI window for managing countdown and interval-based tasks."""
 
     def __init__(self, parent, day_name):
         super().__init__(parent)
@@ -258,6 +275,7 @@ class TimerWindow(ctk.CTkToplevel):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def installation_ui(self):
+        """Draws window layout controls for managing intervals."""
         self.entry = ctk.CTkEntry(self, placeholder_text="Interval (Break 2h or 40min)")
         self.entry.pack(fill="x", padx=20, pady=10)
         ctk.CTkButton(self, text="ADD", command=self.add_mission).pack(pady=5)
@@ -266,6 +284,7 @@ class TimerWindow(ctk.CTkToplevel):
         ctk.CTkButton(self, text="DELETE LAST", fg_color="red", command=self.delete_past).pack(pady=5)
 
     def parse_mission(self, text):
+        """Converts human-readable interval strings (e.g., '2h', '40min') into absolute seconds."""
         match = re.search(r"(\d+)h|(\d+)min", text)
         if match:
             time_val = match.group()
@@ -274,6 +293,7 @@ class TimerWindow(ctk.CTkToplevel):
         return text, None
 
     def add_mission(self):
+        """Parses and appends an interval tracker payload to storage."""
         raw = self.entry.get().strip()
         if not raw: return
         text, seconds = self.parse_mission(raw)
@@ -289,29 +309,32 @@ class TimerWindow(ctk.CTkToplevel):
         self.render_mission()
 
     def delete_past(self):
+        """Removes the last added element from the current subset."""
         if not self.tasks: return
         db.execute("DELETE FROM tasks WHERE id = ?", (self.tasks[-1]["id"],))
         self.load_mission()
         self.render_mission()
 
     def load_mission(self):
+        """Retrieves interval timer configurations from storage."""
         rows = db.execute('''
             SELECT id, task_text, interval_seconds, last_notified_timestamp 
             FROM tasks WHERE day = ? AND task_type = 'timer' ORDER BY id
         ''', (self.day_name,))
 
-        # Map rows to dict keys
         self.tasks = [{
             "id": r[0], "text": r[1], "interval": r[2], "last_notified_time": r[3]
         } for r in rows]
 
     def render_mission(self):
+        """Renders interval parameters inside the monitoring text area."""
         self.tasks_box.delete("1.0", "end")
         for i, task in enumerate(self.tasks, 1):
             time_str = f"[{task['interval']} sec]" if task['interval'] else ""
             self.tasks_box.insert("end", f"{i}. ☐ {task['text']} {time_str}\n")
 
     def check_moment(self):
+        """Polls timestamp deltas to evaluate if configured interval time blocks have elapsed."""
         if self._is_destroyed: return
         now_ts = datetime.now().timestamp()
 
@@ -325,6 +348,7 @@ class TimerWindow(ctk.CTkToplevel):
         self.after(30000, self.check_moment)
 
     def notify(self, task):
+        """Spawns an asynchronous audio notification popup specifically for timers."""
         try:
             winsound.PlaySound("study.wav", winsound.SND_FILENAME | winsound.SND_ASYNC)
         except:
@@ -337,12 +361,13 @@ class TimerWindow(ctk.CTkToplevel):
         ctk.CTkButton(popup, text="OK", command=popup.destroy).pack(pady=5)
 
     def on_close(self):
+        """Marks the loop context as terminated to prevent detached event tracking calls."""
         self._is_destroyed = True
         self.destroy()
 
 
 class Daily(ctk.CTk):
-    """Main application window."""
+    """Main application core orchestrating windows, dashboards, and background processes."""
 
     def __init__(self):
         super().__init__()
@@ -355,11 +380,13 @@ class Daily(ctk.CTk):
         self.protocol('WM_DELETE_WINDOW', self.hide_window)
 
     def reset_all_files(self):
+        """Clears status flags for all registered tracking components across the schema."""
         db.execute("UPDATE tasks SET is_done = 0, already_notified = 0 WHERE task_type = 'daily'")
         print("All database daily tasks reset!")
         self.draw_button()
 
     def draw_button(self):
+        """Generates the primary home matrix navigation matrix view."""
         self.clear_screen()
         self.main_container = ctk.CTkFrame(self)
         self.main_container.pack(pady=10, fill="both", expand=True)
@@ -382,36 +409,42 @@ class Daily(ctk.CTk):
                       command=self.reset_all_files).grid(row=3, column=4, columnspan=2, pady=20)
 
     def clear_screen(self):
+        """Clears existing layout sub-components prior to view updates."""
         if self.main_container:
             self.main_container.destroy()
 
     def Overdue_task(self):
+        """Displays a compilation overview of explicitly flagged failed assignments (status=2)."""
         self.clear_screen()
         self.main_container = ctk.CTkFrame(self)
         self.main_container.pack(fill="both", expand=True)
 
-        rows = db.execute("SELECT day, task_text FROM tasks WHERE is_done = 0 AND task_type = 'daily'")
-        all_undone = [f"{row[0]}: {row[1]}" for row in rows]
+        rows = db.execute("SELECT day, task_text FROM tasks WHERE is_done = 2 AND task_type = 'daily'")
+        all_failed = [f"{row[0]}: {row[1]}" for row in rows]
 
         textbox = ctk.CTkTextbox(self.main_container, height=150)
         textbox.pack(pady=10, padx=10, fill="both")
-        for item in all_undone:
+        for item in all_failed:
             textbox.insert("end", item + "\n")
         ctk.CTkButton(self.main_container, text="Back", command=self.draw_button).pack(pady=5)
 
     def hide_window(self):
+        """Intercepts window termination to minimize application layout directly into system tray."""
         self.withdraw()
 
     def safe_show_window(self):
-        """Thread-safe window deiconification using after()."""
+        """Safely queues main window thread execution from external event contexts."""
         self.after(0, self.deiconify)
 
     def quit_app(self):
+        """Ensures system tray resource cleanup before killing the environment run loop."""
         if self.tray:
             self.tray.stop()
-        self.quit()  # Clean exit from mainloop()
+        self.destroy()
+        self.quit()
 
     def create_tray_icon(self):
+        """Spawns an independent detached worker thread handling the system tray icon."""
         icon_image = Image.new('RGB', (64, 64), color=(86, 118, 215))
         menu = pystray.Menu(
             pystray.MenuItem('Open', self.safe_show_window),
